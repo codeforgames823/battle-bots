@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+  <meta name="theme-color" content="#0a0e1a" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="description" content="Battle Bots — flip the other bot to win. Real-time online 2-player game in your browser." />
+  <link rel="icon" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%2300eaff'/><text x='50%25' y='62%25' font-size='20' text-anchor='middle' fill='%23000' font-family='monospace'>BB</text></svg>" />
+  <title>Battle Bots — Flip or be Flipped</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <!-- Background grid + glow -->
+  <div class="bg-grid" aria-hidden="true"></div>
+  <div class="bg-glow" aria-hidden="true"></div>
+
+  <!-- ==================== HOME SCREEN ==================== -->
+  <main id="home-screen" class="screen visible">
+    <header class="topbar">
+      <div class="logo">
+        <span class="logo-mark">BB</span>
+        <span class="logo-text">Battle Bots</span>
+      </div>
+      <div class="topbar-right">
+        <button class="coins" id="coins-display" type="button" aria-label="Your coins">
+          <span class="coin-icon">¢</span>
+          <span id="coins-amount">100</span>
+        </button>
+        <button class="icon-btn" id="settings-btn" type="button" aria-label="Settings">⚙</button>
+      </div>
+    </header>
+
+    <!-- Hero banner -->
+    <section class="hero">
+      <div class="hero-art">
+        <canvas id="hero-canvas" width="800" height="280" aria-hidden="true"></canvas>
+      </div>
+      <div class="hero-text">
+        <h1 class="hero-title">FLIP <span class="accent">OR BE</span> FLIPPED</h1>
+        <p class="hero-sub">Two bots. One arena. The first to land on its back loses.</p>
+        <button class="btn btn-primary btn-huge" id="play-quick-btn" type="button">PLAY ONLINE</button>
+      </div>
+    </section>
+
+    <!-- Mode buttons row -->
+    <section class="mode-row">
+      <button class="mode-card" id="mode-quick" type="button">
+        <div class="mode-icon">⚡</div>
+        <div class="mode-name">Quick Match</div>
+        <div class="mode-sub">Find an opponent</div>
+      </button>
+      <button class="mode-card" id="mode-friend" type="button">
+        <div class="mode-icon">👥</div>
+        <div class="mode-name">Friend Battle</div>
+        <div class="mode-sub">5-letter code</div>
+      </button>
+      <button class="mode-card" id="mode-ai" type="button">
+        <div class="mode-icon">🤖</div>
+        <div class="mode-name">Vs AI</div>
+        <div class="mode-sub">Practice offline</div>
+      </button>
+    </section>
+
+    <!-- Tab nav for sections -->
+    <nav class="tabs" role="tablist">
+      <button class="tab active" data-tab="garage" role="tab" aria-selected="true">Garage</button>
+      <button class="tab" data-tab="shop" role="tab">Shop</button>
+      <button class="tab" data-tab="leaderboard" role="tab">Leaderboard</button>
+      <button class="tab" data-tab="profile" role="tab">Profile</button>
+      <button class="tab" data-tab="howto" role="tab">How to Play</button>
+    </nav>
+
+    <section class="tab-panels">
+      <div class="tab-panel active" id="tab-garage" role="tabpanel"></div>
+      <div class="tab-panel" id="tab-shop" role="tabpanel"></div>
+      <div class="tab-panel" id="tab-leaderboard" role="tabpanel"></div>
+      <div class="tab-panel" id="tab-profile" role="tabpanel"></div>
+      <div class="tab-panel" id="tab-howto" role="tabpanel"></div>
+    </section>
+
+    <footer class="footer">
+      <button class="link-btn" id="google-signin-btn" type="button">
+        <span class="g-mark">G</span> Sign in with Google
+        <span class="badge">perks coming</span>
+      </button>
+      <span class="footer-spacer"></span>
+      <span class="footer-info">v0.1 · made with ⚡ on the web</span>
+    </footer>
+  </main>
+
+  <!-- ==================== GAME SCREEN ==================== -->
+  <section id="game-screen" class="screen">
+    <canvas id="game-canvas"></canvas>
+
+    <!-- HUD overlay -->
+    <div class="hud" id="hud">
+      <div class="hud-top">
+        <div class="hud-player hud-player-left">
+          <div class="hud-name" id="hud-name-0">YOU</div>
+          <div class="hud-bar"><div class="hud-bar-fill" id="hud-hp-0"></div></div>
+          <div class="hud-rounds" id="hud-rounds-0"></div>
+        </div>
+        <div class="hud-center">
+          <div class="hud-timer" id="hud-timer">60</div>
+          <div class="hud-status" id="hud-status">Round 1</div>
+        </div>
+        <div class="hud-player hud-player-right">
+          <div class="hud-name" id="hud-name-1">OPPONENT</div>
+          <div class="hud-bar"><div class="hud-bar-fill" id="hud-hp-1"></div></div>
+          <div class="hud-rounds" id="hud-rounds-1"></div>
+        </div>
+      </div>
+
+      <button class="icon-btn pause-btn" id="pause-btn" type="button" aria-label="Pause">II</button>
+
+      <!-- Touch controls (visible on touch devices) -->
+      <div class="touch-controls" id="touch-controls" aria-hidden="true">
+        <div class="joystick" id="joystick">
+          <div class="joystick-base"></div>
+          <div class="joystick-thumb" id="joystick-thumb"></div>
+        </div>
+        <div class="action-buttons">
+          <button class="action-btn action-attack" id="touch-attack" type="button" aria-label="Attack">ATK</button>
+          <button class="action-btn action-special" id="touch-special" type="button" aria-label="Special">SP</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Connection / matchmaking overlay -->
+    <div class="overlay" id="overlay-net">
+      <div class="overlay-card">
+        <div class="spinner"></div>
+        <div class="overlay-title" id="overlay-net-title">Connecting…</div>
+        <div class="overlay-sub" id="overlay-net-sub">Finding an opponent</div>
+        <button class="btn btn-ghost" id="overlay-net-cancel" type="button">Cancel</button>
+      </div>
+    </div>
+
+    <!-- Round / match end overlay -->
+    <div class="overlay" id="overlay-result">
+      <div class="overlay-card overlay-card-large">
+        <div class="result-banner" id="result-banner">VICTORY</div>
+        <div class="result-detail" id="result-detail">You flipped the opponent!</div>
+        <div class="result-coins" id="result-coins"></div>
+        <div class="result-actions">
+          <button class="btn btn-secondary" id="result-home" type="button">Home</button>
+          <button class="btn btn-primary" id="result-rematch" type="button">Rematch</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Pause overlay -->
+    <div class="overlay" id="overlay-pause">
+      <div class="overlay-card">
+        <div class="overlay-title">Paused</div>
+        <div class="result-actions">
+          <button class="btn btn-secondary" id="pause-quit" type="button">Quit</button>
+          <button class="btn btn-primary" id="pause-resume" type="button">Resume</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ==================== MODAL: Friend Code ==================== -->
+  <div class="modal" id="modal-friend">
+    <div class="modal-card">
+      <h2>Friend Battle</h2>
+      <p class="modal-sub">Play against a friend on another device.</p>
+      <div class="modal-section">
+        <button class="btn btn-primary btn-block" id="friend-create" type="button">Create new room</button>
+      </div>
+      <div class="modal-section">
+        <label for="friend-code-input">Or enter their code:</label>
+        <input id="friend-code-input" type="text" maxlength="5" placeholder="ABCDE" autocomplete="off" inputmode="latin" />
+        <button class="btn btn-secondary btn-block" id="friend-join" type="button">Join room</button>
+      </div>
+      <div class="modal-section" id="friend-room-display" hidden>
+        <p>Share this code with your friend:</p>
+        <div class="room-code" id="friend-room-code">—</div>
+        <p class="room-status" id="friend-room-status">Waiting for opponent…</p>
+      </div>
+      <button class="modal-close" id="modal-friend-close" type="button" aria-label="Close">×</button>
+    </div>
+  </div>
+
+  <!-- ==================== MODAL: Settings ==================== -->
+  <div class="modal" id="modal-settings">
+    <div class="modal-card">
+      <h2>Settings</h2>
+      <div class="settings-row">
+        <label for="set-username">Username</label>
+        <input id="set-username" type="text" maxlength="24" />
+      </div>
+      <div class="settings-row">
+        <label for="set-master">Master volume</label>
+        <input id="set-master" type="range" min="0" max="100" value="80" />
+      </div>
+      <div class="settings-row">
+        <label for="set-music">Music volume</label>
+        <input id="set-music" type="range" min="0" max="100" value="60" />
+      </div>
+      <div class="settings-row">
+        <label for="set-sfx">SFX volume</label>
+        <input id="set-sfx" type="range" min="0" max="100" value="80" />
+      </div>
+      <div class="settings-row">
+        <label for="set-tilt">Tilt steering (phones)</label>
+        <input id="set-tilt" type="checkbox" />
+      </div>
+      <div class="settings-row">
+        <label for="set-hifx">High effects</label>
+        <input id="set-hifx" type="checkbox" checked />
+      </div>
+      <div class="settings-row">
+        <button class="btn btn-ghost btn-block" id="set-reset" type="button">Reset progress (local only)</button>
+      </div>
+      <button class="modal-close" id="modal-settings-close" type="button" aria-label="Close">×</button>
+    </div>
+  </div>
+
+  <!-- ==================== TOAST ==================== -->
+  <div class="toast" id="toast"></div>
+
+  <!-- Scripts (no build step — modern browsers handle ES modules natively) -->
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>

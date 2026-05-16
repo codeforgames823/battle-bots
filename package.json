@@ -1,0 +1,14 @@
+{
+  "name": "battle-bots",
+  "version": "0.1.0",
+  "description": "Real-time online 2-player flip-the-other-bot browser game",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "serve": "python -m http.server 9091",
+    "gen:art": "node scripts/generate-art.js"
+  },
+  "devDependencies": {
+    "sharp": "^0.33.5"
+  }
+}
