@@ -2,7 +2,7 @@
 
 A real-time online 2-player web game where you ram, lift, and **flip the other bot over**. Earn coins, buy stronger bots in the shop, climb the leaderboard.
 
-> **Play it live:** _(URL added after first GitHub Pages deploy)_
+> **Play it live:** https://codeforgames823.github.io/battle-bots/
 
 ## Features
 
