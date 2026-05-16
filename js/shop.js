@@ -4,9 +4,46 @@ import { BOTS, PAINT_COLORS, getBot, drawPortrait } from './bots.js';
 import { getProfile, setProfile, ownsBot, addOwnedBot, spendCoins, getApiUrl } from './storage.js';
 import { playSfx } from './audio.js';
 import { toast } from './controls.js';
+import { getUnlocked, ACHIEVEMENTS } from './achievements.js';
+import { TIERS as CHAMP_TIERS, isTierWon } from './championship.js';
 
 let onChange = () => {};
 export function setShopChangeHandler(fn) { onChange = fn || (() => {}); }
+
+// Try to use the AI-generated portrait image; fall back to canvas drawing.
+// Returns a DOM element ready to attach.
+function makePortraitElement(botId, paintColor, w = 200, h = 110) {
+  const wrap = document.createElement('div');
+  wrap.className = 'bot-portrait-wrap';
+  wrap.style.position = 'relative';
+  wrap.style.width = '100%';
+  wrap.style.aspectRatio = `${w} / ${h}`;
+  // Always draw canvas as the source-of-truth backdrop (matches the paint color)
+  const cv = document.createElement('canvas');
+  cv.width = w; cv.height = h;
+  cv.style.width = '100%';
+  cv.style.height = '100%';
+  cv.style.borderRadius = 'var(--radius-md)';
+  drawPortrait(cv, botId, paintColor);
+  wrap.appendChild(cv);
+  // Attempt to overlay the AI image
+  const img = new Image();
+  img.alt = '';
+  img.style.position = 'absolute';
+  img.style.inset = '0';
+  img.style.width = '100%';
+  img.style.height = '100%';
+  img.style.objectFit = 'cover';
+  img.style.borderRadius = 'var(--radius-md)';
+  img.style.opacity = '0';
+  img.style.transition = 'opacity 350ms ease';
+  img.style.mixBlendMode = 'screen';
+  img.onload = () => { img.style.opacity = '0.55'; };
+  img.onerror = () => { img.remove(); };
+  img.src = `img/bots/${botId}.webp`;
+  wrap.appendChild(img);
+  return wrap;
+}
 
 // ---------------------------------------------------------------------------
 // Garage tab — owned bots, set active, paint colors
@@ -101,10 +138,7 @@ function makeOwnedCard(id, profile, container) {
   card.className = 'bot-card owned' + (id === profile.activeBot ? ' active' : '');
   const portrait = document.createElement('div');
   portrait.className = 'bot-portrait';
-  const cv = document.createElement('canvas');
-  cv.width = 200; cv.height = 110;
-  drawPortrait(cv, id, id === profile.activeBot ? profile.activeColor : def.color);
-  portrait.appendChild(cv);
+  portrait.appendChild(makePortraitElement(id, id === profile.activeBot ? profile.activeColor : def.color));
   const name = document.createElement('div');
   name.className = 'bot-name';
   name.textContent = def.name;
@@ -163,10 +197,7 @@ function makeShopCard(def, profile, container) {
 
   const portrait = document.createElement('div');
   portrait.className = 'bot-portrait';
-  const cv = document.createElement('canvas');
-  cv.width = 200; cv.height = 110;
-  drawPortrait(cv, def.id, def.color);
-  portrait.appendChild(cv);
+  portrait.appendChild(makePortraitElement(def.id, def.color));
 
   const name = document.createElement('div');
   name.className = 'bot-name';
@@ -291,23 +322,26 @@ export async function renderLeaderboard(container) {
   container.innerHTML = '<p style="color:var(--text-dim)">Loading…</p>';
   const api = getApiUrl();
   let rows = [];
+  let online = false;
   if (api) {
     try {
       const r = await fetch(`${api}/api/leaderboard`);
-      if (r.ok) rows = await r.json();
+      if (r.ok) { rows = await r.json(); online = true; }
     } catch {}
   }
-  if (!rows.length) {
-    rows = makeLocalLeaderboard();
-  }
   container.innerHTML = '';
-  if (!api) {
-    const note = document.createElement('p');
-    note.style.color = 'var(--text-dim)';
-    note.style.fontSize = 'var(--font-sm)';
-    note.style.marginTop = '0';
-    note.textContent = 'Offline mode — showing your local stats. Set the backend URL in the browser console with `localStorage.setItem("bb_api", "https://...")` to see the global board.';
-    container.appendChild(note);
+  if (!online) {
+    // Friendly empty state — show local stats + invite to play more
+    const empty = document.createElement('div');
+    empty.className = 'empty-state';
+    empty.innerHTML = `
+      <div class="empty-icon">📡</div>
+      <h3>Offline leaderboard</h3>
+      <p>No backend connected, so we're showing your local stats. When the online server is live you'll see the top 100 players here.</p>
+      <p style="font-size:var(--font-sm);color:var(--text-dim)">Tip: set <code>localStorage.bb_api</code> in DevTools to point at your backend URL.</p>
+    `;
+    container.appendChild(empty);
+    rows = makeLocalLeaderboard();
   }
   const list = document.createElement('div');
   list.className = 'lb-list';
@@ -334,7 +368,17 @@ export async function renderLeaderboard(container) {
 
 function makeLocalLeaderboard() {
   const profile = getProfile();
-  return [{ username: profile.username, coins: profile.coins, active_bot: profile.activeBot, you: true }];
+  const rows = [{ username: profile.username, coins: profile.coins, active_bot: profile.activeBot, you: true }];
+  // Add 3 fake "rivals" derived from local stats so the board doesn't look empty
+  if (profile.wins + profile.losses >= 1) {
+    rows.push(
+      { username: 'Sparkbot',  coins: Math.max(50,  Math.floor(profile.coins * 0.8)), active_bot: 'flipper' },
+      { username: 'IronJaw',   coins: Math.max(25,  Math.floor(profile.coins * 0.5)), active_bot: 'drum' },
+      { username: 'Phantom',   coins: Math.max(0,   Math.floor(profile.coins * 0.3)), active_bot: 'wedge' },
+    );
+    rows.sort((a, b) => b.coins - a.coins);
+  }
+  return rows;
 }
 
 export function renderProfile(container) {
@@ -355,9 +399,21 @@ export function renderProfile(container) {
   card.appendChild(right);
   container.appendChild(card);
 
+  const totalMatches = profile.wins + profile.losses;
+  if (totalMatches === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'empty-state empty-state-inline';
+    empty.innerHTML = `
+      <div class="empty-icon">🤖</div>
+      <h3>No matches yet</h3>
+      <p>Play your first match to start earning coins and tracking stats. Try <strong>Vs AI</strong> on Easy to learn the controls.</p>
+    `;
+    container.appendChild(empty);
+  }
+
   const stats = document.createElement('div');
   stats.className = 'profile-stats';
-  const winRate = (profile.wins + profile.losses) > 0 ? Math.round((profile.wins * 100) / (profile.wins + profile.losses)) : 0;
+  const winRate = totalMatches > 0 ? Math.round((profile.wins * 100) / totalMatches) : 0;
   stats.innerHTML = `
     ${profileStat(profile.wins, 'Wins')}
     ${profileStat(profile.losses, 'Losses')}
@@ -368,6 +424,51 @@ export function renderProfile(container) {
     ${profileStat(profile.ownedBots.length + '/' + BOTS.length, 'Bots owned')}
   `;
   container.appendChild(stats);
+
+  // Trophy case
+  const trophyHeader = document.createElement('h3');
+  trophyHeader.textContent = 'Trophies';
+  trophyHeader.className = 'profile-section-title';
+  container.appendChild(trophyHeader);
+  const trophyRow = document.createElement('div');
+  trophyRow.className = 'trophy-row';
+  for (const tier of CHAMP_TIERS) {
+    const won = isTierWon(tier.id);
+    const t = document.createElement('div');
+    t.className = 'trophy' + (won ? ' won' : ' locked');
+    t.style.setProperty('--tier-color', tier.color);
+    t.innerHTML = `
+      <div class="trophy-icon">${won ? tier.icon : '🔒'}</div>
+      <div class="trophy-name">${tier.name}</div>
+    `;
+    trophyRow.appendChild(t);
+  }
+  container.appendChild(trophyRow);
+
+  // Achievements
+  const achHeader = document.createElement('h3');
+  const unlocked = getUnlocked();
+  const unlockCount = unlocked.filter((a) => a.unlocked).length;
+  achHeader.textContent = `Achievements (${unlockCount}/${ACHIEVEMENTS.length})`;
+  achHeader.className = 'profile-section-title';
+  container.appendChild(achHeader);
+  const achGrid = document.createElement('div');
+  achGrid.className = 'ach-grid';
+  for (const a of unlocked) {
+    const el = document.createElement('div');
+    el.className = 'ach' + (a.unlocked ? ' unlocked' : ' locked');
+    el.title = a.desc;
+    el.innerHTML = `
+      <div class="ach-icon">${a.unlocked ? a.icon : '🔒'}</div>
+      <div class="ach-info">
+        <div class="ach-name">${a.name}</div>
+        <div class="ach-desc">${a.desc}</div>
+        ${a.unlocked ? '' : `<div class="ach-reward">+${a.reward}¢</div>`}
+      </div>
+    `;
+    achGrid.appendChild(el);
+  }
+  container.appendChild(achGrid);
 }
 
 function profileStat(value, label) {

@@ -8,9 +8,11 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <meta name="mobile-web-app-capable" content="yes" />
   <meta name="description" content="Battle Bots — flip the other bot to win. Real-time online 2-player game in your browser." />
+  <link rel="manifest" href="manifest.json" />
   <link rel="icon" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%2300eaff'/><text x='50%25' y='62%25' font-size='20' text-anchor='middle' fill='%23000' font-family='monospace'>BB</text></svg>" />
+  <link rel="apple-touch-icon" href="img/icons/icon-180.png" />
   <title>Battle Bots — Flip or be Flipped</title>
-  <link rel="stylesheet" href="style.css" />
+  <link rel="stylesheet" href="style.css?v=2" />
 </head>
 <body>
   <!-- Background grid + glow -->
@@ -41,12 +43,18 @@
       <div class="hero-text">
         <h1 class="hero-title">FLIP <span class="accent">OR BE</span> FLIPPED</h1>
         <p class="hero-sub">Two bots. One arena. The first to land on its back loses.</p>
-        <button class="btn btn-primary btn-huge" id="play-quick-btn" type="button">PLAY ONLINE</button>
+        <button class="btn btn-primary btn-huge" id="play-quick-btn" type="button">PLAY</button>
+        <div class="hero-cta-sub" id="play-quick-sub">Quick fight vs AI</div>
       </div>
     </section>
 
     <!-- Mode buttons row -->
     <section class="mode-row">
+      <button class="mode-card mode-card-feature" id="mode-championship" type="button">
+        <div class="mode-icon">🏆</div>
+        <div class="mode-name">Championship</div>
+        <div class="mode-sub">4 cups · big rewards</div>
+      </button>
       <button class="mode-card" id="mode-quick" type="button">
         <div class="mode-icon">⚡</div>
         <div class="mode-name">Quick Match</div>
@@ -57,11 +65,16 @@
         <div class="mode-name">Friend Battle</div>
         <div class="mode-sub">5-letter code</div>
       </button>
-      <button class="mode-card" id="mode-ai" type="button">
+      <div class="mode-card mode-card-ai" id="mode-ai" role="button" tabindex="0">
         <div class="mode-icon">🤖</div>
         <div class="mode-name">Vs AI</div>
         <div class="mode-sub">Practice offline</div>
-      </button>
+        <div class="mode-diff" id="mode-ai-diff" role="group" aria-label="Difficulty">
+          <button type="button" data-diff="easy"   class="diff-pill diff-easy active">EASY</button>
+          <button type="button" data-diff="medium" class="diff-pill diff-medium">MED</button>
+          <button type="button" data-diff="hard"   class="diff-pill diff-hard">HARD</button>
+        </div>
+      </div>
     </section>
 
     <!-- Tab nav for sections -->
@@ -104,6 +117,7 @@
           <div class="hud-rounds" id="hud-rounds-0"></div>
         </div>
         <div class="hud-center">
+          <div class="hud-label" id="hud-label" style="display:none"></div>
           <div class="hud-timer" id="hud-timer">60</div>
           <div class="hud-status" id="hud-status">Round 1</div>
         </div>
@@ -221,10 +235,59 @@
     </div>
   </div>
 
+  <!-- ==================== MODAL: Championship ==================== -->
+  <div class="modal" id="modal-championship">
+    <div class="modal-card modal-card-large">
+      <h2>🏆 Championship</h2>
+      <p class="modal-sub">Climb the cups. Win the Grand Championship.</p>
+      <div class="champ-tiers"></div>
+      <button class="modal-close" id="modal-championship-close" type="button" aria-label="Close">×</button>
+    </div>
+  </div>
+
+  <!-- ==================== TUTORIAL OVERLAY ==================== -->
+  <div class="modal tutorial-modal" id="modal-tutorial">
+    <div class="modal-card tutorial-card">
+      <div class="tutorial-step" data-step="0">
+        <div class="tutorial-icon">🤖</div>
+        <h2>Welcome to Battle Bots</h2>
+        <p>Flip the other bot onto its back. First to 2 round wins takes the match.</p>
+      </div>
+      <div class="tutorial-step" data-step="1" hidden>
+        <div class="tutorial-icon">⌨️</div>
+        <h2>Controls</h2>
+        <p><strong>Desktop:</strong> <kbd>A</kbd>/<kbd>D</kbd> or arrows to drive, <kbd>K</kbd>/<kbd>Space</kbd> to attack, <kbd>L</kbd> for special.</p>
+        <p><strong>Phone:</strong> joystick on the left, action buttons on the right.</p>
+      </div>
+      <div class="tutorial-step" data-step="2" hidden>
+        <div class="tutorial-icon">⚡</div>
+        <h2>Attack &amp; Special</h2>
+        <p><strong>Attack</strong> short cooldown, knocks the opponent forward and can flip them.</p>
+        <p><strong>Special</strong> charges while you fight. When ready, fire a bigger move that can end a round.</p>
+      </div>
+      <div class="tutorial-step" data-step="3" hidden>
+        <div class="tutorial-icon">🏆</div>
+        <h2>Win coins → Buy bots → Climb cups</h2>
+        <p>Use the <strong>Shop</strong> to buy stronger bots. Take them into <strong>Championship</strong> for trophies and big coin rewards.</p>
+      </div>
+      <div class="tutorial-actions">
+        <button class="btn btn-ghost" id="tutorial-skip" type="button">Skip</button>
+        <button class="btn btn-primary" id="tutorial-next" type="button">Next</button>
+      </div>
+    </div>
+  </div>
+
   <!-- ==================== TOAST ==================== -->
   <div class="toast" id="toast"></div>
 
   <!-- Scripts (no build step — modern browsers handle ES modules natively) -->
-  <script type="module" src="js/main.js"></script>
+  <script type="module" src="js/main.js?v=2"></script>
+  <script>
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('sw.js').catch(() => {});
+      });
+    }
+  </script>
 </body>
 </html>

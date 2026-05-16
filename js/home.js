@@ -2,17 +2,21 @@
 
 import { getProfile, setProfile, getSettings, setSettings, resetProgress, getApiUrl, setApiUrl, setToken, getToken } from './storage.js';
 import { renderGarage, renderShop, renderLeaderboard, renderProfile, renderHowto, setShopChangeHandler } from './shop.js';
-import { startMatch, showNetOverlay, hideNetOverlay, externalState, externalRoundEnd, externalMatchEnd } from './game.js';
+import { startMatch, showNetOverlay, hideNetOverlay, externalState, externalRoundEnd, externalMatchEnd, refreshSettings } from './game.js';
 import { playSfx, applySettings } from './audio.js';
 import { toast } from './controls.js';
 import { drawBot } from './bots.js';
 import { makeBot, makeWorld, ARENA, step, reset as resetBot } from './physics.js';
 import { getBot } from './bots.js';
+import { openChampionshipModal, closeChampionshipModal } from './championship.js';
+import { openTutorial } from './tutorial.js';
 
 let heroAnimRaf = 0;
 let heroWorld = null;
 let heroLastT = 0;
 let heroDir = [1, -1];
+
+let aiDifficulty = 'easy';
 
 export function initHome() {
   // Hero animation
@@ -21,9 +25,36 @@ export function initHome() {
   refreshCoins();
   // Mode buttons
   document.getElementById('mode-quick')?.addEventListener('click', onQuickMatch);
-  document.getElementById('play-quick-btn')?.addEventListener('click', onQuickMatch);
+  document.getElementById('play-quick-btn')?.addEventListener('click', onPlayPrimary);
   document.getElementById('mode-friend')?.addEventListener('click', () => openModal('modal-friend'));
-  document.getElementById('mode-ai')?.addEventListener('click', onPlayAI);
+  const aiCard = document.getElementById('mode-ai');
+  aiCard?.addEventListener('click', (e) => {
+    if (e.target.closest('.diff-pill')) return;
+    onPlayAI();
+  });
+  aiCard?.addEventListener('keydown', (e) => {
+    if (e.target.closest('.diff-pill')) return;
+    if (e.code === 'Enter' || e.code === 'Space') {
+      e.preventDefault();
+      onPlayAI();
+    }
+  });
+  document.getElementById('mode-championship')?.addEventListener('click', openChampionshipModal);
+  document.getElementById('modal-championship-close')?.addEventListener('click', closeChampionshipModal);
+  document.getElementById('modal-championship')?.addEventListener('click', (e) => {
+    if (e.target.id === 'modal-championship') closeChampionshipModal();
+  });
+  // Difficulty picker
+  for (const pill of document.querySelectorAll('#mode-ai-diff .diff-pill')) {
+    pill.addEventListener('click', (e) => {
+      e.stopPropagation();
+      aiDifficulty = pill.dataset.diff;
+      for (const p of document.querySelectorAll('#mode-ai-diff .diff-pill')) {
+        p.classList.toggle('active', p === pill);
+      }
+    });
+  }
+  updatePrimaryCta();
   // Settings
   document.getElementById('settings-btn')?.addEventListener('click', () => openSettings());
   document.getElementById('coins-display')?.addEventListener('click', () => {
@@ -62,7 +93,10 @@ export function initHome() {
     setSettings({ tilt: e.target.checked });
     if (e.target.checked) requestTiltPermission();
   });
-  document.getElementById('set-hifx')?.addEventListener('change', (e) => setSettings({ hifx: e.target.checked }));
+  document.getElementById('set-hifx')?.addEventListener('change', (e) => {
+    setSettings({ hifx: e.target.checked });
+    refreshSettings();
+  });
   document.getElementById('set-reset')?.addEventListener('click', () => {
     if (confirm('Reset progress? This wipes coins and owned bots on this device.')) {
       resetProgress();
@@ -168,15 +202,31 @@ function onPlayAI() {
     mode: 'ai',
     botId: profile.activeBot,
     color: profile.activeColor,
-    aiDifficulty: 'medium',
+    aiDifficulty,
   });
+}
+
+// Big hero PLAY button: prefers online when backend is configured,
+// otherwise just kicks off a fast Vs AI match.
+function onPlayPrimary() {
+  if (getApiUrl()) {
+    onQuickMatch();
+  } else {
+    onPlayAI();
+  }
+}
+
+function updatePrimaryCta() {
+  const btn = document.getElementById('play-quick-btn');
+  const sub = document.getElementById('play-quick-sub');
+  const online = !!getApiUrl();
+  if (btn) btn.textContent = online ? 'PLAY ONLINE' : 'PLAY';
+  if (sub) sub.textContent = online ? 'Quick Match · find an opponent' : 'Quick fight vs AI (offline)';
 }
 
 async function onQuickMatch() {
   const api = getApiUrl();
   if (!api) {
-    // Offline → fall back to AI with a friendly note
-    toast('No backend configured — playing vs AI instead.');
     onPlayAI();
     return;
   }
@@ -232,7 +282,18 @@ async function onFriendCreate() {
       const status = document.getElementById('friend-room-status');
       if (codeEl) codeEl.textContent = code;
       if (display) display.hidden = false;
-      if (status) status.textContent = 'Waiting for opponent…';
+      if (status) {
+        const link = shareFriendLink(code);
+        status.innerHTML = `Waiting for opponent…<br><button class="btn btn-ghost" id="friend-share">Copy share link</button>`;
+        status.querySelector('#friend-share')?.addEventListener('click', async () => {
+          try {
+            await navigator.clipboard.writeText(link);
+            toast('Link copied — send it to your friend!');
+          } catch {
+            prompt('Copy this link:', link);
+          }
+        });
+      }
     };
     handle.onMatchStart = (msg) => {
       closeModal('modal-friend');
@@ -315,6 +376,31 @@ async function ensureGuestToken() {
   } catch {
     // fail silently — local mode still works
   }
+}
+
+export function handleDeepLink() {
+  try {
+    const params = new URLSearchParams(window.location.search);
+    const code = (params.get('join') || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 5);
+    if (code.length >= 4) {
+      const input = document.getElementById('friend-code-input');
+      if (input) input.value = code;
+      openModal('modal-friend');
+      if (!getApiUrl()) {
+        setTimeout(() => toast('Friend Battle needs an online server. Configure one in Settings → bb_api.'), 1200);
+      }
+    }
+    if (params.get('tutorial') === '1') {
+      openTutorial();
+    }
+  } catch {}
+}
+
+export function shareFriendLink(code) {
+  const url = new URL(window.location.href);
+  url.search = '';
+  url.searchParams.set('join', code);
+  return url.toString();
 }
 
 async function syncUsernameToServer(username) {

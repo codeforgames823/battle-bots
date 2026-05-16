@@ -1,11 +1,14 @@
 // Entry point. Wires up screens and routes between them.
 // Filled in once home.js, game.js, and net.js are ready.
 
-import { initStorage, getProfile, setProfile } from './storage.js';
-import { initHome, showHome } from './home.js';
-import { initGame, showGame } from './game.js';
+import { initStorage } from './storage.js';
+import { initHome, showHome, handleDeepLink } from './home.js';
+import { initGame } from './game.js';
 import { initAudio } from './audio.js';
 import { detectTouchDevice, toast } from './controls.js';
+import { initTutorial } from './tutorial.js';
+import { restoreActiveRun } from './championship.js';
+import { checkAndUnlock } from './achievements.js';
 
 function boot() {
   initStorage();
@@ -14,8 +17,11 @@ function boot() {
   initHome();
   initGame();
   showHome();
-
-  // Service-worker / PWA hook left for v2.
+  restoreActiveRun();
+  initTutorial();
+  // Backfill any newly-applicable achievements when profile updated externally
+  checkAndUnlock();
+  handleDeepLink();
 
   window.addEventListener('error', (e) => {
     console.error('Uncaught:', e.error || e.message);
@@ -39,4 +45,4 @@ if (document.readyState === 'loading') {
   boot();
 }
 
-export { showHome, showGame, toast };
+export { showHome, toast };

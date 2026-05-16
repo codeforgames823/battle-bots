@@ -8,12 +8,15 @@ import { getBot, drawBot } from './bots.js';
 import { makeAI } from './ai.js';
 import { getInput, initControls, setActionCooldownVisuals } from './controls.js';
 import { playSfx, startMusic, stopMusic } from './audio.js';
-import { getProfile, awardCoins, recordWin, recordLoss, recordFlip } from './storage.js';
+import { getProfile, awardCoins, recordWin, recordLoss, recordFlip, getSettings } from './storage.js';
+import { onMatchPlayed } from './achievements.js';
 
 const ROUND_SECONDS = 60;
 const ROUNDS_TO_WIN = 2;
 const COIN_WIN = 50;
 const COIN_LOSS = 10;
+// After match ends, ignore rematch clicks for this many ms (prevents double-fire / accidental restart)
+const RESULT_LOCKOUT_MS = 700;
 
 let canvas, ctx;
 let world = null;
@@ -35,6 +38,8 @@ let elapsedSec = 0;       // for rendering animations
 let waitingResume = false;
 
 let onMatchEnd = null;    // callback for online integrations
+let resultShownAt = 0;    // timestamp result overlay was last shown
+let lastAiDifficulty = 'easy';
 
 export function initGame() {
   canvas = document.getElementById('game-canvas');
@@ -49,14 +54,24 @@ export function initGame() {
   document.addEventListener('keydown', (e) => {
     if (e.code === 'Escape' && running && !matchOver) togglePause();
   });
-  // Result overlay buttons
-  document.getElementById('result-home')?.addEventListener('click', quitToHome);
-  document.getElementById('result-rematch')?.addEventListener('click', () => {
+  // Result overlay buttons — guarded against accidental rapid-fire after match end
+  document.getElementById('result-home')?.addEventListener('click', (e) => {
+    if (!isResultClickable()) { e.preventDefault(); return; }
+    quitToHome();
+  });
+  document.getElementById('result-rematch')?.addEventListener('click', (e) => {
+    if (!isResultClickable()) { e.preventDefault(); return; }
     if (mode === 'online' && onlineHandle) {
       onlineHandle.requestRematch();
       hide('overlay-result');
+    } else if (onMatchEnd) {
+      // External (championship) decides next match
+      const action = onMatchEnd({ winnerSlot: lastWinnerSlot, reason: lastReason, coinsAwarded: lastCoins, rematchRequested: true });
+      hide('overlay-result');
+      if (action === 'consumed') return; // championship is handling it
+      startMatch({ mode: 'ai', botId: players[0].botId, color: players[0].color, aiDifficulty: lastAiDifficulty });
     } else {
-      startMatch({ mode: 'ai', botId: players[0].botId, color: players[0].color });
+      startMatch({ mode: 'ai', botId: players[0].botId, color: players[0].color, aiDifficulty: lastAiDifficulty });
     }
   });
   document.getElementById('overlay-net-cancel')?.addEventListener('click', () => {
@@ -64,6 +79,14 @@ export function initGame() {
     quitToHome();
   });
 }
+
+function isResultClickable() {
+  return matchOver && (performance.now() - resultShownAt) >= RESULT_LOCKOUT_MS;
+}
+
+let lastWinnerSlot = 0;
+let lastReason = '';
+let lastCoins = 0;
 
 function resizeCanvas() {
   if (!canvas) return;
@@ -89,7 +112,7 @@ export function hideGame() {
 // Public entry
 // ============================================================================
 
-export function startMatch({ mode: m, botId, color, aiDifficulty = 'medium', onlinePlayers = null, onlineHandle: handle = null, onEnd = null }) {
+export function startMatch({ mode: m, botId, color, aiDifficulty = 'easy', aiBotId = null, aiName: customAiName = null, aiColor = null, onlinePlayers = null, onlineHandle: handle = null, onEnd = null, label = null }) {
   mode = m;
   matchOver = false;
   roundsWon = [0, 0];
@@ -97,14 +120,18 @@ export function startMatch({ mode: m, botId, color, aiDifficulty = 'medium', onl
   cameraShake = 0;
   onMatchEnd = onEnd;
   onlineHandle = handle;
+  lastAiDifficulty = aiDifficulty;
   hide('overlay-result');
   hide('overlay-pause');
   hide('overlay-net');
 
   if (m === 'ai') {
+    const aiBot = aiBotId || pickAIBot(botId);
+    const aiNm  = customAiName || aiName();
+    const aiClr = aiColor || '#ff5577';
     players = [
       { name: getProfile().username || 'YOU', botId, color, slot: 0, isLocal: true,  isAI: false },
-      { name: aiName(), botId: pickAIBot(botId), color: '#ff5577', slot: 1, isLocal: false, isAI: true,  ai: makeAI(aiDifficulty) },
+      { name: aiNm, botId: aiBot, color: aiClr, slot: 1, isLocal: false, isAI: true, ai: makeAI(aiDifficulty) },
     ];
   } else if (m === 'online') {
     players = onlinePlayers;
@@ -112,7 +139,7 @@ export function startMatch({ mode: m, botId, color, aiDifficulty = 'medium', onl
   buildWorld();
   showGame();
   startMusic('cyberpunk');
-  showHud();
+  showHud(label);
   beginRound();
   if (!running) {
     running = true;
@@ -205,10 +232,16 @@ function loop(t) {
     render();
     return;
   }
+  // When match is over, freeze simulation but keep rendering for backdrop
+  if (matchOver) {
+    cameraShake *= Math.max(0, 1 - dt * 4);
+    updateParticles(dt);
+    render();
+    return;
+  }
   elapsedSec += dt;
 
   if (mode === 'ai') {
-    // Step physics locally
     if (!roundActive) {
       countdown -= dt;
       setStatus(countdown > 0 ? Math.ceil(countdown).toString() : 'GO!');
@@ -217,31 +250,29 @@ function loop(t) {
         setStatus('');
       }
     } else {
-      // Build inputs
       const inputs = [];
       const me = world.bots[0];
       const opp = world.bots[1];
       inputs[0] = getInput();
+      // AI sees: self=opp (slot 1), opponent=me (slot 0). Wait — args are (self, opponent).
+      // The AI controls slot 1. So self=world.bots[1], opponent=world.bots[0].
       inputs[1] = players[1].ai.update(opp, me, dt, performance.now());
       step(world, inputs, dt);
       drainEvents();
       handleRoundProgress(dt);
     }
   } else if (mode === 'online') {
-    // Inputs sent to server; physics replicated via state updates
-    const localSlot = players.findIndex((p) => p.isLocal);
+    const ls = localSlot();
     const input = roundActive ? getInput() : { ax: 0, attack: false, special: false };
     onlineHandle?.sendInput(input);
-    if (roundActive) {
-      // Local prediction step for the local bot only (smooth feel)
-      const inputs = world.bots.map((_, i) => i === localSlot ? input : { ax: 0, attack: false, special: false });
+    if (roundActive && world?.bots?.length) {
+      const inputs = world.bots.map((_, i) => i === ls ? input : { ax: 0, attack: false, special: false });
       step(world, inputs, dt);
       drainEvents();
     }
   }
 
-  // Cooldown UI on touch buttons
-  const me = world?.bots[localSlot()];
+  const me = world?.bots?.[localSlot()];
   if (me) setActionCooldownVisuals(me.attackCD, me.specialCD);
 
   cameraShake *= Math.max(0, 1 - dt * 4);
@@ -276,13 +307,12 @@ function handleRoundProgress(dt) {
   if (!roundActive) return;
   roundTime -= dt;
   if (roundTime <= 0 && mode === 'ai') {
-    // Time-up: highest hp wins, ties go to whoever's most upright
+    // Time-up: highest hp wins, exact tie goes to player (slot 0) — feels less unfair
     const a = world.bots[0], b = world.bots[1];
-    let winner = 0;
-    if (a.hp !== b.hp) winner = a.hp > b.hp ? 0 : 1;
+    let winner = a.hp >= b.hp ? 0 : 1;
     endRound(winner, 'time');
   }
-  if (roundTime <= 10 && roundTime > 9) playSfx('tick');
+  if (roundTime <= 10 && roundTime > 9.5) playSfx('tick');
 }
 
 function endRound(winnerSlot, reason) {
@@ -302,6 +332,7 @@ function endRound(winnerSlot, reason) {
 }
 
 function endMatch(winnerSlot, reason) {
+  if (matchOver) return; // guard against double-end
   matchOver = true;
   roundActive = false;
   let coinsAwarded = 0;
@@ -316,8 +347,16 @@ function endMatch(winnerSlot, reason) {
       recordLoss();
     }
   }
+  lastWinnerSlot = winnerSlot;
+  lastReason = reason;
+  lastCoins = coinsAwarded;
+  // Defer notification to championship to AFTER overlay is shown,
+  // so it can choose to suppress/override the default rematch button.
   showResult(winnerSlot, reason, coinsAwarded);
-  if (onMatchEnd) onMatchEnd({ winnerSlot, reason, coinsAwarded });
+  try { onMatchPlayed({ won: winnerSlot === 0, reason, opponentBotId: players[1]?.botId, difficulty: lastAiDifficulty }); } catch (e) { console.warn(e); }
+  if (onMatchEnd) {
+    try { onMatchEnd({ winnerSlot, reason, coinsAwarded, rematchRequested: false }); } catch (e) { console.warn(e); }
+  }
 }
 
 // Called by net.js when server says round/match ended
@@ -329,20 +368,22 @@ export function externalRoundEnd({ winnerSlot, score }) {
   else playSfx('lose');
   setTimeout(() => {
     if (running && !matchOver) {
-      // Server will send 'start' for next round if applicable
       countdown = 3;
-      // physics state will be replaced by next 'state' tick
-      for (const bot of world.bots) reset(bot, bot.x, ARENA.spawnY, bot.facing);
+      if (world?.bots) for (const bot of world.bots) reset(bot, bot.x, ARENA.spawnY, bot.facing);
     }
   }, 1500);
 }
 
 export function externalMatchEnd({ winnerSlot, coinsAwarded, reason }) {
+  if (matchOver) return;
   matchOver = true;
   if (winnerSlot === localSlot()) recordWin(); else recordLoss();
   if (coinsAwarded > 0) awardCoins(coinsAwarded);
-  showResult(winnerSlot, reason || 'flip', coinsAwarded || 0);
-  if (onMatchEnd) onMatchEnd({ winnerSlot, reason, coinsAwarded });
+  lastWinnerSlot = winnerSlot;
+  lastReason = reason || 'flip';
+  lastCoins = coinsAwarded || 0;
+  showResult(winnerSlot, lastReason, lastCoins);
+  if (onMatchEnd) onMatchEnd({ winnerSlot, reason: lastReason, coinsAwarded: lastCoins, rematchRequested: false });
 }
 
 export function externalState(stateMsg) {
@@ -379,9 +420,14 @@ function localSlot() {
 // HUD
 // ============================================================================
 
-function showHud() {
+function showHud(label = null) {
   document.getElementById('hud-name-0').textContent = players[0]?.name || 'YOU';
   document.getElementById('hud-name-1').textContent = players[1]?.name || 'OPP';
+  const lbl = document.getElementById('hud-label');
+  if (lbl) {
+    lbl.textContent = label || '';
+    lbl.style.display = label ? 'block' : 'none';
+  }
   renderRounds();
 }
 function setStatus(s) { const el = document.getElementById('hud-status'); if (el) el.textContent = s; }
@@ -431,6 +477,7 @@ function renderRounds() {
 
 function showResult(winnerSlot, reason, coinsAwarded) {
   try { document.activeElement?.blur?.(); } catch {}
+  resultShownAt = performance.now();
   const youWon = winnerSlot === localSlot();
   const banner = document.getElementById('result-banner');
   const detail = document.getElementById('result-detail');
@@ -446,6 +493,11 @@ function showResult(winnerSlot, reason, coinsAwarded) {
   }
   if (coins) coins.textContent = coinsAwarded ? `+${coinsAwarded} coins` : '';
   show('overlay-result');
+  // Customize rematch label when there's an onMatchEnd handler (championship)
+  const rematchBtn = document.getElementById('result-rematch');
+  if (rematchBtn) {
+    rematchBtn.textContent = onMatchEnd ? (youWon ? 'NEXT FIGHT' : 'TRY AGAIN') : 'REMATCH';
+  }
 }
 
 // ============================================================================
@@ -470,46 +522,56 @@ function getArenaBg(idx) {
   return null;
 }
 
+let hifxCache = null;
+let hifxCachedAt = 0;
+function hifx() {
+  const now = performance.now();
+  if (hifxCache === null || now - hifxCachedAt > 1000) {
+    hifxCache = getSettings()?.hifx !== false;
+    hifxCachedAt = now;
+  }
+  return hifxCache;
+}
+export function refreshSettings() { hifxCache = null; }
+
 function render() {
   if (!ctx) return;
   const W = canvas.width, H = canvas.height;
-  // Clear with dark background gradient
+  const fancy = hifx();
+
   const bgGrad = ctx.createLinearGradient(0, 0, 0, H);
   bgGrad.addColorStop(0, '#0a0e1a');
   bgGrad.addColorStop(1, '#15192e');
   ctx.fillStyle = bgGrad;
   ctx.fillRect(0, 0, W, H);
-  // Draw arena background image if loaded
-  const bg = getArenaBg(activeArenaBg ?? 0);
-  if (bg && bg.complete) {
-    ctx.save();
-    ctx.globalAlpha = 0.45;
-    const ar = bg.width / bg.height;
-    let dw = W, dh = W / ar;
-    if (dh < H * 0.7) { dh = H * 0.7; dw = dh * ar; }
-    ctx.drawImage(bg, (W - dw) / 2, (H * 0.72) - dh + 60, dw, dh);
-    ctx.restore();
+
+  if (fancy) {
+    const bg = getArenaBg(activeArenaBg ?? 0);
+    if (bg && bg.complete) {
+      ctx.save();
+      ctx.globalAlpha = 0.45;
+      const ar = bg.width / bg.height;
+      let dw = W, dh = W / ar;
+      if (dh < H * 0.7) { dh = H * 0.7; dw = dh * ar; }
+      ctx.drawImage(bg, (W - dw) / 2, (H * 0.72) - dh + 60, dw, dh);
+      ctx.restore();
+    }
   }
 
-  // Camera transform
   ctx.save();
-  ctx.translate(W / 2, H * 0.72); // arena center horizontally, lower 3rd vertically
-  // Fit arena in view
+  ctx.translate(W / 2, H * 0.72);
   const targetW = ARENA.halfW * 2 + 80;
   const targetH = 320;
   const scale = Math.min(W / targetW, H / targetH);
   ctx.scale(scale, scale);
-  // Camera shake
-  if (cameraShake > 0.1) {
+  if (fancy && cameraShake > 0.1) {
     const sx = (Math.random() - 0.5) * cameraShake / scale;
     const sy = (Math.random() - 0.5) * cameraShake / scale;
     ctx.translate(sx, sy);
   }
 
-  // Background grid (perspective floor)
-  drawArenaBg();
+  if (fancy) drawArenaBg();
 
-  // Floor
   ctx.fillStyle = '#1f2440';
   ctx.fillRect(-ARENA.halfW - 200, 0, ARENA.halfW * 2 + 400, 200);
   ctx.strokeStyle = 'rgba(0, 234, 255, 0.4)';
@@ -518,7 +580,6 @@ function render() {
   ctx.moveTo(-ARENA.halfW - 200, 0);
   ctx.lineTo(ARENA.halfW + 200, 0);
   ctx.stroke();
-  // Walls
   ctx.fillStyle = '#0e1228';
   ctx.fillRect(-ARENA.halfW - 30, -ARENA.halfW * 0.5, 30, ARENA.halfW * 0.5 + 200);
   ctx.fillRect(ARENA.halfW, -ARENA.halfW * 0.5, 30, ARENA.halfW * 0.5 + 200);
@@ -530,10 +591,8 @@ function render() {
   ctx.lineTo(ARENA.halfW, 0);
   ctx.stroke();
 
-  // Particles below bots
-  drawParticles();
+  if (fancy) drawParticles();
 
-  // Bots
   if (world) {
     for (const bot of world.bots) {
       drawBot(ctx, bot, { t: elapsedSec });
@@ -574,6 +633,7 @@ function drawArenaBg() {
 }
 
 function addParticles(x, y, color, n) {
+  if (!hifx()) n = Math.ceil(n / 3);
   for (let i = 0; i < n; i++) {
     particles.push({
       x, y,
