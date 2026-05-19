@@ -1,7 +1,7 @@
 // Entry point. Wires up screens and routes between them.
 // Filled in once home.js, game.js, and net.js are ready.
 
-import { initStorage } from './storage.js';
+import { initStorage, detectApiUrl } from './storage.js';
 import { initHome, showHome, handleDeepLink } from './home.js';
 import { initGame } from './game.js';
 import { initAudio } from './audio.js';
@@ -22,6 +22,15 @@ function boot() {
   // Backfill any newly-applicable achievements when profile updated externally
   checkAndUnlock();
   handleDeepLink();
+
+  // Fire-and-forget: auto-detect the API URL (portal proxy first, then same origin).
+  // Re-render leaderboard/PLAY button once it resolves.
+  detectApiUrl().then((url) => {
+    if (url) {
+      // Notify any tab that might benefit from re-render
+      window.dispatchEvent(new CustomEvent('bb:api-detected', { detail: { url } }));
+    }
+  });
 
   window.addEventListener('error', (e) => {
     console.error('Uncaught:', e.error || e.message);

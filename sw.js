@@ -1,13 +1,13 @@
 // Battle Bots — minimal service worker for offline play.
 // Cache-first for static assets, network-first for the document (so updates ship).
 
-const CACHE = 'bb-v4';
+const CACHE = 'bb-v5';
 const PRECACHE = [
   './',
   './index.html',
   './style.css?v=3',
   './manifest.json',
-  './js/main.js?v=3',
+  './js/main.js?v=4',
   './js/storage.js',
   './js/physics.js',
   './js/bots.js',
@@ -20,6 +20,7 @@ const PRECACHE = [
   './js/net.js',
   './js/championship.js',
   './js/achievements.js',
+  './js/leaderboard.js',
   './js/tutorial.js',
   './img/hero/main.webp',
   './img/arenas/warehouse.webp',

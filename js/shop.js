@@ -320,63 +320,95 @@ function statBar(label, value, max) {
 export async function renderLeaderboard(container) {
   if (!container) return;
   container.innerHTML = '<p style="color:var(--text-dim)">Loading…</p>';
-  const api = getApiUrl();
-  let rows = [];
-  let online = false;
-  if (api) {
-    try {
-      const r = await fetch(`${api}/api/leaderboard`);
-      if (r.ok) { rows = await r.json(); online = true; }
-    } catch {}
-  }
+  const { fetchLeaderboard, submitScore, computeScore } = await import('./leaderboard.js');
+  const profile = getProfile();
+  const myScore = computeScore(profile);
+
+  const hasApi = !!getApiUrl();
+  // If we're online, opportunistically post our score so we appear on the board.
+  if (hasApi) submitScore({ mode: 'browse' });
+
+  const { leaderboard: rows, offline: dbOffline, error } = await fetchLeaderboard(100);
+
   container.innerHTML = '';
-  if (!online) {
-    // Friendly empty state — show local stats + invite to play more
+
+  // Three states: (1) no API at all, (2) API reachable but no rows yet, (3) network error
+  if (!hasApi) {
     const empty = document.createElement('div');
     empty.className = 'empty-state';
     empty.innerHTML = `
       <div class="empty-icon">📡</div>
-      <h3>Offline leaderboard</h3>
-      <p>No backend connected, so we're showing your local stats. When the online server is live you'll see the top 100 players here.</p>
-      <p style="font-size:var(--font-sm);color:var(--text-dim)">Tip: set <code>localStorage.bb_api</code> in DevTools to point at your backend URL.</p>
+      <h3>Offline mode</h3>
+      <p>The online server isn't reachable right now. Showing your local stats below — they'll be synced when the backend is connected.</p>
     `;
     container.appendChild(empty);
-    rows = makeLocalLeaderboard();
+    rows.push(...makeLocalLeaderboard(profile, myScore));
+  } else if (error) {
+    const empty = document.createElement('div');
+    empty.className = 'empty-state';
+    empty.innerHTML = `
+      <div class="empty-icon">⚠️</div>
+      <h3>Couldn't reach the leaderboard</h3>
+      <p>${escapeHtml(error)}. Try again in a moment.</p>
+    `;
+    container.appendChild(empty);
+    rows.push(...makeLocalLeaderboard(profile, myScore));
+  } else if (rows.length === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'empty-state';
+    if (dbOffline) {
+      empty.innerHTML = `
+        <div class="empty-icon">🗄️</div>
+        <h3>Database warming up</h3>
+        <p>The server is online but the leaderboard storage isn't connected yet. Showing your local stats.</p>
+      `;
+    } else {
+      empty.innerHTML = `
+        <div class="empty-icon">🏆</div>
+        <h3>Leaderboard is empty</h3>
+        <p>Be the first! Win a match to claim the #1 spot.</p>
+      `;
+    }
+    container.appendChild(empty);
+    rows.push(...makeLocalLeaderboard(profile, myScore));
   }
+
   const list = document.createElement('div');
   list.className = 'lb-list';
+  const myName = (profile.username || '').toLowerCase();
   rows.forEach((row, i) => {
     const r = document.createElement('div');
-    r.className = 'lb-row' + (row.you ? ' you' : '');
+    const isMe = !!row.you || (row.name && row.name.toLowerCase() === myName);
+    r.className = 'lb-row' + (isMe ? ' you' : '');
     const rank = document.createElement('div');
     rank.className = 'lb-rank' + (i === 0 ? ' gold' : i === 1 ? ' silver' : i === 2 ? ' bronze' : '');
     rank.textContent = '#' + (i + 1);
     const name = document.createElement('div');
     name.className = 'lb-name';
-    name.textContent = row.username || 'unnamed';
+    name.textContent = row.name || row.username || 'unnamed';
     const bot = document.createElement('div');
     bot.className = 'lb-bot';
-    bot.textContent = getBot(row.active_bot || 'wedge').name;
-    const coins = document.createElement('div');
-    coins.className = 'lb-coins';
-    coins.textContent = (row.coins || 0).toLocaleString() + ' ¢';
-    r.appendChild(rank); r.appendChild(name); r.appendChild(bot); r.appendChild(coins);
+    const botId = row.botId || row.active_bot || 'wedge';
+    bot.textContent = getBot(botId).name;
+    const score = document.createElement('div');
+    score.className = 'lb-coins';
+    const value = (row.score != null) ? row.score : (row.coins || 0);
+    score.textContent = (+value || 0).toLocaleString() + ' pts';
+    r.appendChild(rank); r.appendChild(name); r.appendChild(bot); r.appendChild(score);
     list.appendChild(r);
   });
   container.appendChild(list);
 }
 
-function makeLocalLeaderboard() {
-  const profile = getProfile();
-  const rows = [{ username: profile.username, coins: profile.coins, active_bot: profile.activeBot, you: true }];
-  // Add 3 fake "rivals" derived from local stats so the board doesn't look empty
+function makeLocalLeaderboard(profile, myScore) {
+  const rows = [{ name: profile.username, score: myScore, botId: profile.activeBot, you: true }];
   if (profile.wins + profile.losses >= 1) {
     rows.push(
-      { username: 'Sparkbot',  coins: Math.max(50,  Math.floor(profile.coins * 0.8)), active_bot: 'flipper' },
-      { username: 'IronJaw',   coins: Math.max(25,  Math.floor(profile.coins * 0.5)), active_bot: 'drum' },
-      { username: 'Phantom',   coins: Math.max(0,   Math.floor(profile.coins * 0.3)), active_bot: 'wedge' },
+      { name: 'Sparkbot',  score: Math.max(80,  Math.floor(myScore * 0.8)), botId: 'flipper' },
+      { name: 'IronJaw',   score: Math.max(50,  Math.floor(myScore * 0.55)), botId: 'drum' },
+      { name: 'Phantom',   score: Math.max(20,  Math.floor(myScore * 0.3)), botId: 'wedge' },
     );
-    rows.sort((a, b) => b.coins - a.coins);
+    rows.sort((a, b) => (b.score || 0) - (a.score || 0));
   }
   return rows;
 }

@@ -1,11 +1,15 @@
 // Battle Bots — REST + WebSocket server.
 // Express handles HTTP. The same HTTP server is upgraded to WebSocket via the `ws` library.
+// Optionally serves the static frontend from the parent directory so a single
+// deploy (e.g. Dokku) hosts both client and API at one URL.
 //
 // Env vars: see .env.example.
 import express from 'express';
 import cors from 'cors';
 import rateLimit from 'express-rate-limit';
 import http from 'node:http';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
 import { URL } from 'node:url';
 
@@ -14,11 +18,14 @@ import { issueGuest, loadByToken, sanitizeUsername } from './auth.js';
 import { BOTS, getBot } from './bots.js';
 import { makeMatchmaker } from './matchmaker.js';
 
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
 const {
   PORT = 8080,
   ALLOWED_ORIGINS = '*',
   COIN_WIN = 50,
   COIN_LOSS = 10,
+  SERVE_STATIC = '1', // when truthy, also serve ../ as the frontend root
 } = process.env;
 
 const allowed = ALLOWED_ORIGINS === '*'
@@ -42,12 +49,14 @@ const writeLimiter = rateLimit({
 // REST routes
 // ---------------------------------------------------------------------------
 
-app.get('/', (_req, res) => res.json({ name: 'battle-bots-api', status: 'ok' }));
-
+// Health endpoint stays JSON even when static frontend is mounted at /.
 app.get('/health', async (_req, res) => {
+  if (!DB.hasDatabase()) {
+    return res.json({ status: 'ok', db: 'offline', uptime: process.uptime() });
+  }
   try {
     await DB.ping();
-    res.json({ status: 'ok', db: 'ok' });
+    res.json({ status: 'ok', db: 'ok', uptime: process.uptime() });
   } catch (e) {
     res.status(500).json({ status: 'degraded', db: 'down', error: e.message });
   }
@@ -137,14 +146,49 @@ app.post('/api/garage/active', writeLimiter, async (req, res) => {
   res.json({ ok: true });
 });
 
-// GET /api/leaderboard
-app.get('/api/leaderboard', async (_req, res) => {
+// GET /api/leaderboard?limit=100 — guest-friendly, modeled on Inca Quest.
+// Returns: { leaderboard: [{ name, score, wins, botId, mode }, ...] }
+app.get('/api/leaderboard', async (req, res) => {
   try {
-    const rows = await DB.leaderboard(100);
-    res.json(rows);
+    const limit = Math.min(parseInt(req.query.limit, 10) || 100, 500);
+    const rows = await DB.getGuestLeaderboard(limit);
+    res.json({ leaderboard: rows, offline: !DB.hasDatabase() });
   } catch (e) {
     console.error('leaderboard failed:', e);
-    res.status(500).json({ error: 'leaderboard_failed' });
+    res.status(500).json({ error: 'leaderboard_failed', leaderboard: [] });
+  }
+});
+
+// POST /api/leaderboard/submit { name, score, botId?, wins?, mode? } → { ok, rank, name }
+// Guest-friendly: no auth required, name is sanitized to alphanumeric+space.
+app.post('/api/leaderboard/submit', writeLimiter, async (req, res) => {
+  try {
+    const { name, score, botId, wins, mode, token } = req.body || {};
+    const rawName = String(name || '').trim();
+    const cleanName = sanitizeUsername(rawName) || sanitizeUsername('Player' + Math.floor(Math.random() * 9999));
+    const numScore = Number.isFinite(+score) ? Math.max(0, Math.min(1e12, Math.floor(+score))) : 0;
+    if (!cleanName || cleanName.length < 1) {
+      return res.status(400).json({ error: 'invalid_name' });
+    }
+    let userId = null;
+    if (token) {
+      const u = await loadByToken(token);
+      if (u) userId = u.id;
+    }
+    const cleanBot = typeof botId === 'string' && /^[a-z0-9_-]{1,32}$/.test(botId) ? botId : null;
+    const cleanMode = ['ai', 'championship', 'online'].includes(mode) ? mode : null;
+    const result = await DB.submitGuestScore({
+      userId,
+      name: cleanName,
+      score: numScore,
+      botId: cleanBot,
+      wins: Number.isFinite(+wins) ? Math.max(0, +wins | 0) : 0,
+      mode: cleanMode,
+    });
+    res.json({ ok: true, ...result, offline: !DB.hasDatabase() });
+  } catch (e) {
+    console.error('leaderboard submit failed:', e);
+    res.status(500).json({ error: 'submit_failed' });
   }
 });
 
@@ -169,6 +213,22 @@ function sanitizeColor(c) {
   const s = String(c).trim().toLowerCase();
   if (/^#[0-9a-f]{6}$/.test(s)) return s;
   return null;
+}
+
+// ---------------------------------------------------------------------------
+// Static frontend (optional — disable by setting SERVE_STATIC=0)
+// ---------------------------------------------------------------------------
+if (SERVE_STATIC && SERVE_STATIC !== '0' && SERVE_STATIC !== 'false') {
+  const staticRoot = path.resolve(__dirname, '..');
+  app.use(express.static(staticRoot, { maxAge: '5m', extensions: ['html'] }));
+  // SPA fallback for any GET that didn't match API/static and looks like a navigation.
+  app.get(/^(?!\/(api|health|play|battle-bots-api)).*/, (req, res, next) => {
+    if (req.method !== 'GET' || req.accepts('html') === false) return next();
+    res.sendFile(path.join(staticRoot, 'index.html'), (err) => err && next());
+  });
+  console.log(`[static] serving frontend from ${staticRoot}`);
+} else {
+  app.get('/', (_req, res) => res.json({ name: 'battle-bots-api', status: 'ok' }));
 }
 
 // ---------------------------------------------------------------------------
@@ -205,10 +265,14 @@ server.on('upgrade', async (req, socket, head) => {
   }
 });
 
-server.listen(PORT, () => {
-  console.log(`battle-bots-api listening on :${PORT}`);
-  console.log(`allowed origins: ${ALLOWED_ORIGINS}`);
-});
+(async () => {
+  await DB.initSchema();
+  server.listen(PORT, () => {
+    console.log(`battle-bots-api listening on :${PORT}`);
+    console.log(`allowed origins: ${ALLOWED_ORIGINS}`);
+    console.log(`database: ${DB.hasDatabase() ? 'connected' : 'OFFLINE (leaderboard/online disabled)'}`);
+  });
+})();
 
 export { app, server };
 

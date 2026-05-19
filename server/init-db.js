@@ -1,13 +1,17 @@
 // One-time DB initialization. Run with `npm run init-db`.
-// Requires PG* env vars to be set (see .env.example).
+// Uses DATABASE_URL or PG* env vars (see .env.example).
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import pg from 'pg';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const url = process.env.DATABASE_URL || '';
+const isLocal = url.includes('localhost');
+
 const pool = new pg.Pool({
-  ssl: process.env.PGSSL === 'true' ? { rejectUnauthorized: false } : false,
+  connectionString: url || undefined,
+  ssl: isLocal ? false : (url || process.env.PGSSL === 'true') ? { rejectUnauthorized: false } : false,
 });
 
 const sql = fs.readFileSync(path.join(__dirname, 'schema.sql'), 'utf8');

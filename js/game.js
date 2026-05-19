@@ -357,6 +357,8 @@ function endMatch(winnerSlot, reason) {
   if (onMatchEnd) {
     try { onMatchEnd({ winnerSlot, reason, coinsAwarded, rematchRequested: false }); } catch (e) { console.warn(e); }
   }
+  // Submit score to the global leaderboard (best-effort, swallows errors).
+  import('./leaderboard.js').then(({ submitScore }) => submitScore({ mode })).catch(() => {});
 }
 
 // Called by net.js when server says round/match ended
@@ -384,6 +386,7 @@ export function externalMatchEnd({ winnerSlot, coinsAwarded, reason }) {
   lastCoins = coinsAwarded || 0;
   showResult(winnerSlot, lastReason, lastCoins);
   if (onMatchEnd) onMatchEnd({ winnerSlot, reason: lastReason, coinsAwarded: lastCoins, rematchRequested: false });
+  import('./leaderboard.js').then(({ submitScore }) => submitScore({ mode: 'online' })).catch(() => {});
 }
 
 export function externalState(stateMsg) {

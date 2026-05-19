@@ -40,6 +40,27 @@ CREATE INDEX IF NOT EXISTS idx_bb_users_leaderboard ON bb_users (coins DESC, win
 CREATE INDEX IF NOT EXISTS idx_bb_users_lastseen ON bb_users (last_seen DESC);
 CREATE INDEX IF NOT EXISTS idx_bb_matches_ended ON bb_matches (ended_at DESC);
 
+-- ---------------------------------------------------------------------------
+-- Guest-friendly leaderboard, modeled on Inca Quest's `inca_leaderboard`.
+-- Rows are append-only; a player may have many entries. Aggregation (best
+-- score per name) happens at query time so even unauthenticated visitors can
+-- post a score without an account.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS bb_leaderboard (
+  id          BIGSERIAL    PRIMARY KEY,
+  user_id     BIGINT       REFERENCES bb_users(id) ON DELETE SET NULL, -- nullable: guests have no account
+  name        VARCHAR(24)  NOT NULL,
+  score       BIGINT       NOT NULL,
+  bot_id      VARCHAR(32),
+  wins        INTEGER      DEFAULT 0,
+  mode        VARCHAR(16),  -- 'ai' | 'championship' | 'online'
+  created_at  TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_bb_leaderboard_score ON bb_leaderboard (score DESC);
+CREATE INDEX IF NOT EXISTS idx_bb_leaderboard_name  ON bb_leaderboard (name);
+CREATE INDEX IF NOT EXISTS idx_bb_leaderboard_created ON bb_leaderboard (created_at DESC);
+
 -- Seed: a "starter" row for the leaderboard so it's not empty on first deploy.
 -- Safe to re-run because of WHERE NOT EXISTS guard.
 INSERT INTO bb_users (guest_uuid, username, coins, wins, losses, active_bot, active_color)

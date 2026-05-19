@@ -387,7 +387,7 @@ export function handleDeepLink() {
       if (input) input.value = code;
       openModal('modal-friend');
       if (!getApiUrl()) {
-        setTimeout(() => toast('Friend Battle needs an online server. Configure one in Settings → bb_api.'), 1200);
+        setTimeout(() => toast('Friend Battle needs the online server. Trying Vs AI instead.'), 1200);
       }
     }
     if (params.get('tutorial') === '1') {

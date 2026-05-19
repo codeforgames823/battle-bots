@@ -1,0 +1,23 @@
+{
+  "name": "battle-bots",
+  "description": "Realtime 2-player flip-the-other-bot browser game (Node + Postgres + WebSocket)",
+  "keywords": ["game", "websocket", "multiplayer", "canvas"],
+  "healthchecks": {
+    "web": [
+      {
+        "type": "startup",
+        "name": "web check",
+        "description": "Ensure the app responds to /health",
+        "path": "/health",
+        "attempts": 5,
+        "wait": 10,
+        "timeout": 5
+      }
+    ]
+  },
+  "formation": {
+    "web": {
+      "quantity": 1
+    }
+  }
+}

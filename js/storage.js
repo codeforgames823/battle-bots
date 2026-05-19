@@ -102,12 +102,53 @@ export function setSettings(patch) {
   return settings;
 }
 
+// API base auto-detection. Priority:
+//  1) explicit override in localStorage (`bb_api`)
+//  2) /battle-bots-api (when we're hosted behind the games-portal proxy)
+//  3) same-origin "" (when the backend serves the frontend itself, e.g. Dokku)
+//  4) "" — offline mode
+let detectedApi = null;
 export function getApiUrl() {
-  return localStorage.getItem(KEY_API) || ''; // empty = no backend
+  const override = localStorage.getItem(KEY_API);
+  if (override !== null) return override; // even "" disables auto-detect
+  return detectedApi || '';
 }
 export function setApiUrl(url) {
   if (url) localStorage.setItem(KEY_API, url);
   else localStorage.removeItem(KEY_API);
+}
+export function setDetectedApi(url) {
+  detectedApi = url || '';
+}
+export async function detectApiUrl({ timeoutMs = 2000 } = {}) {
+  if (typeof window === 'undefined') return '';
+  // If user already set an override, honor it.
+  const override = localStorage.getItem(KEY_API);
+  if (override !== null) return override;
+  // Candidates: portal-mounted proxy first (covers games-portal.a.justreed.com),
+  // then same-origin (covers Dokku-style standalone hosting).
+  const origin = window.location.origin;
+  const candidates = [
+    `${origin}/battle-bots-api`,
+    `${origin}`, // same-origin /health and /api/*
+  ];
+  for (const base of candidates) {
+    try {
+      const ctrl = new AbortController();
+      const to = setTimeout(() => ctrl.abort(), timeoutMs);
+      const res = await fetch(`${base}/health`, { signal: ctrl.signal, cache: 'no-store' });
+      clearTimeout(to);
+      if (!res.ok) continue;
+      const ct = res.headers.get('content-type') || '';
+      if (!ct.includes('json')) continue; // SPA fallback returns HTML
+      const j = await res.json();
+      if (j && (j.status === 'ok' || j.status === 'healthy' || j.db !== undefined)) {
+        detectedApi = base;
+        return base;
+      }
+    } catch { /* keep probing */ }
+  }
+  return '';
 }
 export function getToken() {
   return localStorage.getItem(KEY_TOKEN) || '';
